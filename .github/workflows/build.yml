@@ -229,6 +229,8 @@ jobs:
           KODI_ANDROID_KEY_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
           KODI_ANDROID_STORE_FILE: /mnt/k/kodi-release.p12
           KODI_ANDROID_STORE_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
+          ANDROID_HOME: /mnt/k/sdk
+          ANDROID_SDK_ROOT: /mnt/k/sdk
         run: |
           echo "${{ secrets.KODI_KEYSTORE_B64 }}" | base64 -d > $WORK/kodi-release.p12
           cd $WORK/build
