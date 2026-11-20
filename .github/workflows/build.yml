@@ -136,7 +136,9 @@ jobs:
       - name: Host tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q autoconf automake libtool gperf swig lzip nasm yasm zip unzip curl
+          sudo apt-get install -y -q autoconf automake libtool bison flex gperf swig \
+            build-essential ccache gawk lzip nasm yasm zip unzip curl \
+            libcurl4-openssl-dev zlib1g-dev python3
           echo "JAVA_HOME=$JAVA_HOME_17_X64" >> $GITHUB_ENV
           echo "$JAVA_HOME_17_X64/bin" >> $GITHUB_PATH
 
