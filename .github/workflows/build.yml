@@ -1,0 +1,261 @@
+name: build-kodi
+
+on:
+  workflow_dispatch:
+    inputs:
+      kodi_tag:
+        description: Kodi git tag (e.g. 21.3-Omega)
+        required: true
+        default: 21.3-Omega
+      platforms:
+        description: both | windows | android
+        required: true
+        default: both
+
+permissions:
+  contents: write
+
+env:
+  KODI_TAG: ${{ inputs.kodi_tag }}
+  KODI_MIRROR: https://mirrors.kodi.tv
+
+jobs:
+  windows:
+    if: ${{ inputs.platforms == 'both' || inputs.platforms == 'windows' }}
+    runs-on: windows-2022
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone Kodi
+        shell: cmd
+        run: git clone --depth 1 --branch %KODI_TAG% https://github.com/xbmc/xbmc C:\k
+
+      - name: Apply guide patch
+        shell: pwsh
+        run: |
+          cd C:\k
+          $patches = @("$env:GITHUB_WORKSPACE\patches\omega-guide-flag.patch",
+                       "$env:GITHUB_WORKSPACE\patches\master-guide-flag.patch")
+          $ok = $false
+          foreach ($p in $patches) {
+            git apply --check $p 2>$null
+            if ($LASTEXITCODE -eq 0) { git apply $p; Write-Host "applied: $p"; $ok = $true; break }
+          }
+          if (-not $ok) { throw "no patch applies to tag $env:KODI_TAG" }
+          $hits = (Select-String -Path xbmc\pvr\guilib\GUIEPGGridContainer.cpp -Pattern StartsBeforePage).Count
+          if ($hits -lt 1) { throw "patched file does not contain StartsBeforePage" }
+          Write-Host "StartsBeforePage occurrences in source: $hits"
+
+      - name: Pin CMake 3.31 and Java 17 on PATH
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-windows-x86_64.zip" -OutFile C:\cmake.zip
+          Expand-Archive C:\cmake.zip -DestinationPath C:\cm
+          Add-Content $env:GITHUB_PATH "C:\cm\cmake-3.31.6-windows-x86_64\bin"
+          Add-Content $env:GITHUB_PATH "$env:JAVA_HOME_17_X64\bin"
+
+      - name: Tool check
+        shell: cmd
+        run: |
+          cmake --version
+          java -version
+
+      - name: Download dependencies
+        shell: cmd
+        run: call C:\k\tools\buildsteps\windows\x64\download-dependencies.bat
+
+      - name: Download msys2
+        shell: cmd
+        run: call C:\k\tools\buildsteps\windows\x64\download-msys2.bat sh
+
+      - name: Build FFmpeg
+        shell: cmd
+        run: |
+          set "JAVA_HOME=%JAVA_HOME_17_X64%"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64
+          call C:\k\tools\buildsteps\windows\x64\make-mingwlibs.bat sh noprompt
+
+      - name: Build Kodi
+        shell: cmd
+        run: |
+          set "JAVA_HOME=%JAVA_HOME_17_X64%"
+          set "CMAKE_POLICY_VERSION_MINIMUM=3.5"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64
+          call C:\k\tools\buildsteps\windows\x64\BuildSetup.bat nobinaryaddons noprompt sh
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem C:\k\project\Win32BuildSetup -Recurse -Filter kodi.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { $exe = Get-ChildItem C:\k\kodi-build -Recurse -Filter kodi.exe -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if (-not $exe) { throw "no kodi.exe found" }
+          Write-Host "kodi.exe: $($exe.FullName)"
+          $bytes = [IO.File]::ReadAllBytes($exe.FullName)
+          if ([Text.Encoding]::ASCII.GetString($bytes) -notmatch "StartsBeforePage") { throw "kodi.exe does not contain StartsBeforePage" }
+          Write-Host "kodi.exe contains StartsBeforePage: OK"
+          $app = $exe.Directory.FullName
+          $zip = "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.zip"
+          Compress-Archive -Path "$app\*" -DestinationPath $zip
+          $exeHash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          @("kodi.exe  $exeHash", "kodi-$env:KODI_TAG-windows-x64.zip  $zipHash") |
+            Set-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.sha256.txt"
+          Get-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.sha256.txt"
+          Get-ChildItem C:\k\project\Win32BuildSetup -Filter "Kodi*Setup*.exe" -ErrorAction SilentlyContinue |
+            Copy-Item -Destination $env:GITHUB_WORKSPACE
+
+      - name: Upload to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "build-$env:KODI_TAG"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "Kodi $env:KODI_TAG + guide flag" --notes "Automated build of Kodi $env:KODI_TAG with the EPG guide StartsBeforePage patch."
+          }
+          $files = Get-ChildItem $env:GITHUB_WORKSPACE | Where-Object { $_.Name -like "kodi-*" -or $_.Name -like "Kodi*Setup*.exe" }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber @($files.FullName)
+
+  android:
+    if: ${{ inputs.platforms == 'both' || inputs.platforms == 'android' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    env:
+      WORK: /mnt/k
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare /mnt workspace
+        run: |
+          sudo mkdir -p $WORK
+          sudo chown $(id -u):$(id -g) $WORK
+          df -h / /mnt
+
+      - name: Host tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q autoconf automake libtool gperf swig lzip nasm yasm zip unzip curl
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> $GITHUB_ENV
+          echo "$JAVA_HOME_17_X64/bin" >> $GITHUB_PATH
+
+      - name: Restore Android SDK cache
+        id: sdkcache
+        uses: actions/cache/restore@v4
+        with:
+          path: /mnt/k/sdk
+          key: android-sdk-plat34-bt3301-ndk21e-v1
+
+      - name: Install Android SDK + NDK r21e
+        if: steps.sdkcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p $WORK/sdk/cmdline-tools
+          curl -sL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/clt.zip -d $WORK/sdk/cmdline-tools
+          mv $WORK/sdk/cmdline-tools/cmdline-tools $WORK/sdk/cmdline-tools/latest
+          yes | $WORK/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$WORK/sdk --licenses > /dev/null
+          $WORK/sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$WORK/sdk "platforms;android-34" "build-tools;33.0.1" "ndk;21.4.7075529"
+
+      - name: Save Android SDK cache
+        if: steps.sdkcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /mnt/k/sdk
+          key: android-sdk-plat34-bt3301-ndk21e-v1
+
+      - name: Clone Kodi and apply guide patch
+        run: |
+          git clone --depth 1 --branch $KODI_TAG https://github.com/xbmc/xbmc $WORK/xbmc
+          cd $WORK/xbmc
+          if git apply --check $GITHUB_WORKSPACE/patches/omega-guide-flag.patch 2>/dev/null; then
+            git apply $GITHUB_WORKSPACE/patches/omega-guide-flag.patch
+            echo "applied: omega-guide-flag.patch"
+          elif git apply --check $GITHUB_WORKSPACE/patches/master-guide-flag.patch 2>/dev/null; then
+            git apply $GITHUB_WORKSPACE/patches/master-guide-flag.patch
+            echo "applied: master-guide-flag.patch"
+          else
+            echo "no patch applies to tag $KODI_TAG"; exit 1
+          fi
+          grep -q StartsBeforePage xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+
+      - name: Restore depends cache
+        id: depcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /mnt/k/xbmc-depends
+            /mnt/k/tarballs
+          key: depends-${{ inputs.kodi_tag }}-armv7-ndk21e-v1
+
+      - name: Configure depends
+        run: |
+          mkdir -p $WORK/tarballs
+          cd $WORK/xbmc/tools/depends
+          ./bootstrap
+          ./configure --with-tarballs=$WORK/tarballs \
+            --host=arm-linux-androideabi --with-ndk-api=21 \
+            --with-sdk-path=$WORK/sdk --with-ndk-path=$WORK/sdk/ndk/21.4.7075529 \
+            --prefix=$WORK/xbmc-depends --disable-debug
+
+      - name: Build depends
+        if: steps.depcache.outputs.cache-hit != 'true'
+        run: |
+          cd $WORK/xbmc/tools/depends
+          make -C native -j$(nproc)
+          make -C target -j$(nproc)
+
+      - name: Save depends cache
+        if: steps.depcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /mnt/k/xbmc-depends
+            /mnt/k/tarballs
+          key: depends-${{ inputs.kodi_tag }}-armv7-ndk21e-v1
+
+      - name: Build Kodi
+        run: |
+          cd $WORK/xbmc
+          make -C tools/depends/target/cmakebuildsys BUILD_DIR=$WORK/build
+          cd $WORK/build
+          make -j$(nproc)
+
+      - name: Make APK
+        env:
+          KODI_ANDROID_KEY_ALIAS: kodibuild
+          KODI_ANDROID_KEY_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
+          KODI_ANDROID_STORE_FILE: /mnt/k/kodi-release.p12
+          KODI_ANDROID_STORE_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
+        run: |
+          echo "${{ secrets.KODI_KEYSTORE_B64 }}" | base64 -d > $WORK/kodi-release.p12
+          cd $WORK/build
+          make apk
+
+      - name: Verify APK
+        run: |
+          apk=$(find $WORK/build $WORK/xbmc -name "*.apk" -path "*release*" 2>/dev/null | head -1)
+          if [ -z "$apk" ]; then apk=$(find $WORK/build $WORK/xbmc -name "kodi*.apk" 2>/dev/null | head -1); fi
+          if [ -z "$apk" ]; then echo "no apk found"; exit 1; fi
+          echo "apk: $apk"
+          rm -rf /tmp/apkchk && mkdir -p /tmp/apkchk
+          unzip -q "$apk" lib/armeabi-v7a/libkodi.so -d /tmp/apkchk
+          grep -aq StartsBeforePage /tmp/apkchk/lib/armeabi-v7a/libkodi.so
+          echo "libkodi.so contains StartsBeforePage: OK"
+          $WORK/sdk/build-tools/33.0.1/apksigner verify --print-certs "$apk"
+          cp "$apk" "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.apk"
+          cd $GITHUB_WORKSPACE
+          sha256sum "kodi-$KODI_TAG-armeabi-v7a.apk" > "kodi-$KODI_TAG-armeabi-v7a.sha256.txt"
+          cat "kodi-$KODI_TAG-armeabi-v7a.sha256.txt"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="build-$KODI_TAG"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Kodi $KODI_TAG + guide flag" --notes "Automated build of Kodi $KODI_TAG with the EPG guide StartsBeforePage patch." || true
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.apk" \
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.sha256.txt"

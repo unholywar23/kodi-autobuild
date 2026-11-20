@@ -1,0 +1,28 @@
+--- a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
++++ b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+@@ -2421,6 +2421,10 @@
+   const int blockOffset = GetProgrammeScrollOffset();
+   const int chanOffset{GetChannelScrollOffset(*m_programmeLayout)};
+ 
++  // Start time of the first (leftmost) block currently visible on the page. Used below to
++  // tell the skin which programme item is the clipped first item of its channel row.
++  const CDateTime pageStart = m_gridModel->GetStartTimeForBlock(blockOffset);
++
+   int cacheBeforeProgramme{0};
+   int cacheAfterProgramme{0};
+   GetProgrammeCacheOffsets(cacheBeforeProgramme, cacheAfterProgramme);
+@@ -2577,6 +2581,14 @@
+             m_gridModel->DecreaseGridItemWidth(channel, block, truncateSize);
+           }
+ 
++          // Tell the skin whether this programme really starts before the visible page
++          // start, i.e. it is the first item of its channel row and is drawn clipped from
++          // the grid edge instead of from its real start position.
++          // Skin usage: String.IsEqual(ListItem.Property(StartsBeforePage),1)
++          const std::shared_ptr<const CPVREpgInfoTag> epgTag = item->GetEPGInfoTag();
++          item->SetProperty("StartsBeforePage",
++                            epgTag && epgTag->StartAsUTC() < pageStart ? 1 : 0);
++
+           if (m_orientation == VERTICAL)
+             ProcessItem(posA2, posB, item, m_lastChannel, focused, m_programmeLayout,
+                         m_focusedProgrammeLayout, currentTime, dirtyregions,

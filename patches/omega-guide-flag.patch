@@ -1,0 +1,28 @@
+diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+index de3ef10..35c471c 100644
+--- a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
++++ b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+@@ -2412,6 +2412,9 @@ void CGUIEPGGridContainer::HandleProgrammeGrid(bool bRender, unsigned int curren
+   CFileItemPtr focusedItem;
+   CFileItemPtr item;
+ 
++  // Start time of the first block on the page (see "StartsBeforePage" below)
++  const CDateTime pageStart = m_gridModel->GetStartTimeForBlock(blockOffset);
++
+   const int lastChannel = m_gridModel->GetLastChannel();
+   while (posB < endB && HasData() && channel <= lastChannel)
+   {
+@@ -2475,6 +2478,13 @@ void CGUIEPGGridContainer::HandleProgrammeGrid(bool bRender, unsigned int curren
+             m_gridModel->DecreaseGridItemWidth(channel, block, truncateSize);
+           }
+ 
++          // Tell the skin whether this item really starts before the page start, i.e. it is
++          // the first item of its row and drawn from the grid edge instead of its real start.
++          // Skin usage: String.IsEqual(ListItem.Property(StartsBeforePage),1)
++          const std::shared_ptr<const CPVREpgInfoTag> epgTag = item->GetEPGInfoTag();
++          item->SetProperty("StartsBeforePage",
++                            epgTag && epgTag->StartAsUTC() < pageStart ? 1 : 0);
++
+           if (m_orientation == VERTICAL)
+             ProcessItem(posA2, posB, item, m_lastChannel, focused, m_programmeLayout,
+                         m_focusedProgrammeLayout, currentTime, dirtyregions,
