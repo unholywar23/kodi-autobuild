@@ -1,0 +1,86 @@
+name: build-adb-rescue
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: rescue
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/dev/null
+
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.KODI_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/rescue.p12"
+          # Do not print the secret or its contents.
+          test -s "$RUNNER_TEMP/rescue.p12" && echo "keystore decoded ($(stat -c%s "$RUNNER_TEMP/rescue.p12") bytes)"
+
+      - name: Build release APK
+        env:
+          RESCUE_KEYSTORE_FILE: ${{ runner.temp }}/rescue.p12
+          RESCUE_STORE_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
+          RESCUE_KEY_PASSWORD: ${{ secrets.KODI_KEY_PASSWORD }}
+          RESCUE_KEY_ALIAS: kodibuild
+        run: |
+          gradle --no-daemon :app:assembleRelease
+
+      - name: Locate and verify APK
+        id: apk
+        run: |
+          apk=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          if [ -z "$apk" ]; then echo "no apk produced"; exit 1; fi
+          echo "apk at: $apk"
+          # Badging basics (don't fail the build if aapt is unavailable).
+          aapt=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -1)
+          if [ -n "$aapt" ]; then
+            "$aapt" dump badging "$apk" 2>/dev/null | grep -E "^package|targetSdkVersion|sdkVersion" || true
+          fi
+          # Verify it is signed with the release key.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | head -1)
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --print-certs "$apk"
+          fi
+          out="$GITHUB_WORKSPACE/adb-rescue-v1.apk"
+          cp "$apk" "$out"
+          sha256sum "$out" | sed "s# .*/# #" > "$GITHUB_WORKSPACE/adb-rescue-v1.apk.sha256.txt"
+          cat "$GITHUB_WORKSPACE/adb-rescue-v1.apk.sha256.txt"
+          echo "apk_out=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="rescue-v1"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "adb-rescue v1" \
+              --notes "Headless Android TV helper that keeps adb-over-Wi-Fi reachable over Tailscale on the onn box." || true
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$GITHUB_WORKSPACE/adb-rescue-v1.apk" \
+            "$GITHUB_WORKSPACE/adb-rescue-v1.apk.sha256.txt"

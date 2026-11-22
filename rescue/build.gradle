@@ -1,0 +1,4 @@
+// Root build file for the adb-rescue standalone project.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
