@@ -1,8 +1,8 @@
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
-index 6a542a5..c2b96ca 100644
+index 6a542a5..35f5133 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
-@@ -371,6 +371,21 @@ bool CDVDVideoCodecAndroidMediaCodec::Open(CDVDStreamInfo &hints, CDVDCodecOptio
+@@ -371,6 +371,28 @@ bool CDVDVideoCodecAndroidMediaCodec::Open(CDVDStreamInfo &hints, CDVDCodecOptio
        hints.profile, hints.ptsinvalid, hints.codec_tag, hints.extradata.GetSize());
  
    m_render_surface = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEMEDIACODECSURFACE);
@@ -11,14 +11,21 @@ index 6a542a5..c2b96ca 100644
 +  // starves the c2.amlogic decoders of output buffers for 10-bit HEVC and AV1
 +  // (black or green picture; "OutputPicture - timeout waiting for buffer").
 +  // Render those through the mediacodec texture (EGL) path instead; 8-bit
-+  // streams keep the cheaper direct surface.
-+  if (m_render_surface &&
-+      ((hints.codec == AV_CODEC_ID_HEVC && hints.profile == FF_PROFILE_HEVC_MAIN_10) ||
-+       hints.codec == AV_CODEC_ID_AV1))
++  // streams keep the cheaper direct surface. Dolby Vision streams are left
++  // alone - the DV branches below pick their own decoder and need the surface.
 +  {
-+    CLog::Log(LOGINFO, "CDVDVideoCodecAndroidMediaCodec::Open - 10-bit HEVC/AV1: using the "
-+                       "mediacodec texture path instead of the direct surface");
-+    m_render_surface = false;
++    const bool isDolbyVision = hints.hdrType == StreamHdrType::HDR_TYPE_DOLBYVISION ||
++                               hints.codec_tag == MKTAG('d', 'v', 'h', 'e') ||
++                               hints.codec_tag == MKTAG('d', 'v', 'h', '1');
++    if (m_render_surface && !isDolbyVision &&
++        ((hints.codec == AV_CODEC_ID_HEVC &&
++          (hints.profile == FF_PROFILE_HEVC_MAIN_10 || hints.bitdepth > 8)) ||
++         hints.codec == AV_CODEC_ID_AV1))
++    {
++      CLog::Log(LOGINFO, "CDVDVideoCodecAndroidMediaCodec::Open - 10-bit HEVC/AV1: using the "
++                         "mediacodec texture path instead of the direct surface");
++      m_render_surface = false;
++    }
 +  }
 +
    m_state = MEDIACODEC_STATE_UNINITIALIZED;

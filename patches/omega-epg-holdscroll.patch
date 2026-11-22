@@ -1,5 +1,5 @@
 diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
-index de3ef10..09c5bc6 100644
+index de3ef10..c1a34cc 100644
 --- a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
 +++ b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
 @@ -25,9 +25,12 @@
@@ -43,7 +43,7 @@ index de3ef10..09c5bc6 100644
    UpdateScrollOffset(currentTime);
    ProcessChannels(currentTime, dirtyregions);
    ProcessRulerDate(currentTime, dirtyregions);
-@@ -419,6 +436,90 @@ bool CGUIEPGGridContainer::OnAction(const CAction& action)
+@@ -419,6 +436,96 @@ bool CGUIEPGGridContainer::OnAction(const CAction& action)
      case ACTION_MOVE_RIGHT:
      case ACTION_MOVE_DOWN:
      case ACTION_MOVE_UP:
@@ -58,15 +58,24 @@ index de3ef10..09c5bc6 100644
 +        // queue within the same rendered frame see frameDuration == 0 and are
 +        // absorbed instead of each forcing a discrete step, so the scroll target
 +        // can never run ahead of the animation and the grid glides row by row.
++        const bool channelAxis =
++            (m_orientation == VERTICAL)
++                ? (action.GetID() == ACTION_MOVE_UP || action.GetID() == ACTION_MOVE_DOWN)
++                : (action.GetID() == ACTION_MOVE_LEFT || action.GetID() == ACTION_MOVE_RIGHT);
++
 +        float speed = std::min(1.0f, static_cast<float>(action.GetHoldTime() - HOLD_TIME_START) /
 +                                         (HOLD_TIME_END - HOLD_TIME_START));
 +        unsigned int frameDuration =
 +            std::min(CTimeUtils::GetFrameTime() - m_lastHoldTime, 50u); // max 20fps
 +
 +        // maximal scroll rate is at least 30 steps per second, and at most
-+        // (number of channels / 7) steps per second; minimal rate is 10 per second
-+        const float rows =
-+            static_cast<float>(m_gridModel ? m_gridModel->ChannelItemsSize() : 0);
++        // (number of steps along this axis / 7) steps per second; minimal rate
++        // is 10 per second (same ramp as CGUIBaseContainer)
++        float rows = 0.0f;
++        if (m_gridModel)
++          rows = channelAxis
++                     ? static_cast<float>(m_gridModel->ChannelItemsSize())
++                     : static_cast<float>(m_gridModel->GridItemsSize()) / BLOCK_SCROLL_OFFSET;
 +        float maxSpeed = std::max(frameDuration * 0.001f * 30, frameDuration * 0.001f * rows / 7);
 +        float minSpeed = frameDuration * 0.001f * 10;
 +        m_scrollItemsPerFrame += std::max(minSpeed, speed * maxSpeed);
@@ -76,17 +85,14 @@ index de3ef10..09c5bc6 100644
 +        if (m_scrollItemsPerFrame > 1.0f)
 +          m_scrollItemsPerFrame = 1.0f;
 +
-+        // While the scroll animation of the axis this action moves is still more
-+        // than 1.5 steps away from its target, absorb the repeat. Otherwise the
-+        // target outruns the drawn offset until ScrollToChannelOffset()/
-+        // ScrollToBlockOffset() snap the drawn offset, teleporting past rows.
++        // While the scroll animation of the axis this action moves is more than
++        // half a step away from its target, absorb the repeat (the emitted step
++        // adds one more step of lag, so the lag stays under 1.5 steps - below
++        // the smallest snap range of ScrollToChannelOffset()/ScrollToBlockOffset(),
++        // which would teleport the drawn offset past rows).
 +        float pending = 0.0f;
 +        if (m_programmeLayout)
 +        {
-+          const bool channelAxis =
-+              (m_orientation == VERTICAL)
-+                  ? (action.GetID() == ACTION_MOVE_UP || action.GetID() == ACTION_MOVE_DOWN)
-+                  : (action.GetID() == ACTION_MOVE_LEFT || action.GetID() == ACTION_MOVE_RIGHT);
 +          if (channelAxis)
 +          {
 +            const float size = m_programmeLayout->Size(m_orientation);
@@ -101,7 +107,7 @@ index de3ef10..09c5bc6 100644
 +          }
 +        }
 +
-+        if (pending > 1.5f || m_scrollItemsPerFrame < 1.0f)
++        if (pending > 0.5f || m_scrollItemsPerFrame < 1.0f)
 +          return true; // repeat absorbed; the animation is still catching up
 +
 +        m_scrollItemsPerFrame -= 1.0f;
@@ -134,7 +140,7 @@ index de3ef10..09c5bc6 100644
      case ACTION_NAV_BACK:
        // use base class implementation
        return CGUIControl::OnAction(action);
-@@ -2368,10 +2469,24 @@ void CGUIEPGGridContainer::HandleProgrammeGrid(bool bRender, unsigned int curren
+@@ -2368,10 +2475,24 @@ void CGUIEPGGridContainer::HandleProgrammeGrid(bool bRender, unsigned int curren
  
      if (m_gridModel->FreeProgrammeMemory(firstChannel, lastChannel, firstBlock, lastBlock))
      {
