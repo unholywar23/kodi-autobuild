@@ -46,6 +46,13 @@ jobs:
           $hits = (Select-String -Path xbmc\pvr\guilib\GUIEPGGridContainer.cpp -Pattern StartsBeforePage).Count
           if ($hits -lt 1) { throw "patched file does not contain StartsBeforePage" }
           Write-Host "StartsBeforePage occurrences in source: $hits"
+          git apply --check "$env:GITHUB_WORKSPACE\patches\omega-epg-holdscroll.patch"
+          if ($LASTEXITCODE -ne 0) { throw "omega-epg-holdscroll.patch does not apply to tag $env:KODI_TAG" }
+          git apply "$env:GITHUB_WORKSPACE\patches\omega-epg-holdscroll.patch"
+          Write-Host "applied: omega-epg-holdscroll.patch"
+          $h = (Select-String -Path xbmc\pvr\guilib\GUIEPGGridContainer.cpp -Pattern "epg-holdscroll").Count
+          if ($h -lt 1) { throw "patched file does not contain epg-holdscroll" }
+          Write-Host "epg-holdscroll occurrences in source: $h"
 
       - name: Pin CMake 3.31 and Java 17 on PATH
         shell: pwsh
@@ -92,16 +99,19 @@ jobs:
           if (-not $exe) { throw "no kodi.exe found" }
           Write-Host "kodi.exe: $($exe.FullName)"
           $bytes = [IO.File]::ReadAllBytes($exe.FullName)
-          if ([Text.Encoding]::ASCII.GetString($bytes) -notmatch "StartsBeforePage") { throw "kodi.exe does not contain StartsBeforePage" }
+          $ascii = [Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -notmatch "StartsBeforePage") { throw "kodi.exe does not contain StartsBeforePage" }
           Write-Host "kodi.exe contains StartsBeforePage: OK"
+          if ($ascii -notmatch "epg-holdscroll") { throw "kodi.exe does not contain epg-holdscroll" }
+          Write-Host "kodi.exe contains epg-holdscroll: OK"
           $app = $exe.Directory.FullName
-          $zip = "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.zip"
+          $zip = "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-holdscroll-windows-x64.zip"
           Compress-Archive -Path "$app\*" -DestinationPath $zip
           $exeHash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash
-          @("kodi.exe  $exeHash", "kodi-$env:KODI_TAG-windows-x64.zip  $zipHash") |
-            Set-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.sha256.txt"
-          Get-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-windows-x64.sha256.txt"
+          @("kodi.exe  $exeHash", "kodi-$env:KODI_TAG-holdscroll-windows-x64.zip  $zipHash") |
+            Set-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-holdscroll-windows-x64.sha256.txt"
+          Get-Content "$env:GITHUB_WORKSPACE\kodi-$env:KODI_TAG-holdscroll-windows-x64.sha256.txt"
           Get-ChildItem C:\k\project\Win32BuildSetup -Filter "Kodi*Setup*.exe" -ErrorAction SilentlyContinue |
             Copy-Item -Destination $env:GITHUB_WORKSPACE
 
@@ -188,6 +198,20 @@ jobs:
           echo "applied: omega-sdk29-legacy.patch"
           grep -q "set(TARGET_TARGETSDK 29)" cmake/platform/android/android.cmake
           grep -q "targetSdk @TARGET_TARGETSDK@" tools/android/packaging/xbmc/build.gradle.in
+          echo "--- applying epg holdscroll patch ---"
+          if ! git apply --check $GITHUB_WORKSPACE/patches/omega-epg-holdscroll.patch; then
+            echo "omega-epg-holdscroll.patch does not apply to tag $KODI_TAG"; exit 1
+          fi
+          git apply $GITHUB_WORKSPACE/patches/omega-epg-holdscroll.patch
+          echo "applied: omega-epg-holdscroll.patch"
+          grep -q "epg-holdscroll" xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+          echo "--- applying android 10bit egl patch ---"
+          if ! git apply --check $GITHUB_WORKSPACE/patches/omega-android-10bit-egl.patch; then
+            echo "omega-android-10bit-egl.patch does not apply to tag $KODI_TAG"; exit 1
+          fi
+          git apply $GITHUB_WORKSPACE/patches/omega-android-10bit-egl.patch
+          echo "applied: omega-android-10bit-egl.patch"
+          grep -q "mediacodec texture path" xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
 
       - name: Restore depends cache
         id: depcache
@@ -254,6 +278,10 @@ jobs:
           unzip -q "$apk" lib/armeabi-v7a/libkodi.so -d /tmp/apkchk
           grep -aq StartsBeforePage /tmp/apkchk/lib/armeabi-v7a/libkodi.so
           echo "libkodi.so contains StartsBeforePage: OK"
+          grep -aq "epg-holdscroll" /tmp/apkchk/lib/armeabi-v7a/libkodi.so
+          echo "libkodi.so contains epg-holdscroll: OK"
+          grep -aq "mediacodec texture path" /tmp/apkchk/lib/armeabi-v7a/libkodi.so
+          echo "libkodi.so contains the 10bit-egl marker: OK"
           # Assert the built APK targets SDK 29 (legacy external storage path).
           aapt2=$(ls $WORK/sdk/build-tools/*/aapt2 2>/dev/null | head -1)
           aapt=$(ls $WORK/sdk/build-tools/*/aapt 2>/dev/null | head -1)
@@ -266,10 +294,10 @@ jobs:
           if [ "$target_sdk" != "29" ]; then echo "targetSdkVersion is '$target_sdk', expected 29"; exit 1; fi
           echo "APK targetSdkVersion is 29: OK"
           $WORK/sdk/build-tools/33.0.1/apksigner verify --print-certs "$apk"
-          cp "$apk" "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.apk"
+          cp "$apk" "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.apk"
           cd $GITHUB_WORKSPACE
-          sha256sum "kodi-$KODI_TAG-sdk29-armeabi-v7a.apk" > "kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"
-          cat "kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"
+          sha256sum "kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.apk" > "kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.sha256.txt"
+          cat "kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.sha256.txt"
 
       - name: Upload to release
         env:
@@ -280,5 +308,5 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Kodi $KODI_TAG + guide flag" --notes "Automated build of Kodi $KODI_TAG with the EPG guide StartsBeforePage patch." || true
           fi
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.apk" \
-            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.apk" \
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-holdscroll-armeabi-v7a.sha256.txt"

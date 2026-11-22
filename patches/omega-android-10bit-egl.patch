@@ -1,0 +1,26 @@
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
+index 6a542a5..c2b96ca 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodecAndroidMediaCodec.cpp
+@@ -371,6 +371,21 @@ bool CDVDVideoCodecAndroidMediaCodec::Open(CDVDStreamInfo &hints, CDVDCodecOptio
+       hints.profile, hints.ptsinvalid, hints.codec_tag, hints.extradata.GetSize());
+ 
+   m_render_surface = CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEMEDIACODECSURFACE);
++
++  // On Amlogic with this legacy-targetSdk build, the direct SurfaceView path
++  // starves the c2.amlogic decoders of output buffers for 10-bit HEVC and AV1
++  // (black or green picture; "OutputPicture - timeout waiting for buffer").
++  // Render those through the mediacodec texture (EGL) path instead; 8-bit
++  // streams keep the cheaper direct surface.
++  if (m_render_surface &&
++      ((hints.codec == AV_CODEC_ID_HEVC && hints.profile == FF_PROFILE_HEVC_MAIN_10) ||
++       hints.codec == AV_CODEC_ID_AV1))
++  {
++    CLog::Log(LOGINFO, "CDVDVideoCodecAndroidMediaCodec::Open - 10-bit HEVC/AV1: using the "
++                       "mediacodec texture path instead of the direct surface");
++    m_render_surface = false;
++  }
++
+   m_state = MEDIACODEC_STATE_UNINITIALIZED;
+   m_codecControlFlags = 0;
+   m_hints = hints;

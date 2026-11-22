@@ -1,0 +1,134 @@
+diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+index de3ef10..8e0f47c 100644
+--- a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
++++ b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+@@ -25,9 +25,12 @@
+ #include "pvr/guilib/GUIEPGGridContainerModel.h"
+ #include "utils/MathUtils.h"
+ #include "utils/StringUtils.h"
++#include "utils/TimeUtils.h"
+ #include "utils/Variant.h"
++#include "utils/log.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <memory>
+ #include <mutex>
+ #include <string>
+@@ -41,6 +44,10 @@ using namespace PVR;
+ #define BLOCKJUMP    4 // how many blocks are jumped with each analogue scroll action
+ static const int BLOCK_SCROLL_OFFSET = 60 / CGUIEPGGridContainerModel::MINSPERBLOCK; // how many blocks are jumped if we are at left/right edge of grid
+ 
++// held-key budget, same constants as CGUIBaseContainer
++#define HOLD_TIME_START 100
++#define HOLD_TIME_END   3000
++
+ CGUIEPGGridContainer::CGUIEPGGridContainer(int parentID,
+                                            int controlID,
+                                            float posX,
+@@ -419,6 +426,90 @@ bool CGUIEPGGridContainer::OnAction(const CAction& action)
+     case ACTION_MOVE_RIGHT:
+     case ACTION_MOVE_DOWN:
+     case ACTION_MOVE_UP:
++    {
++      if (!HasFocus())
++        return false;
++
++      if (action.GetHoldTime() > HOLD_TIME_START)
++      {
++        // Key is held down: budget the moves by wall-clock time, like
++        // CGUIBaseContainer does for plain lists. Repeats drained from the event
++        // queue within the same rendered frame see frameDuration == 0 and are
++        // absorbed instead of each forcing a discrete step, so the scroll target
++        // can never run ahead of the animation and the grid glides row by row.
++        float speed = std::min(1.0f, static_cast<float>(action.GetHoldTime() - HOLD_TIME_START) /
++                                         (HOLD_TIME_END - HOLD_TIME_START));
++        unsigned int frameDuration =
++            std::min(CTimeUtils::GetFrameTime() - m_lastHoldTime, 50u); // max 20fps
++
++        // maximal scroll rate is at least 30 steps per second, and at most
++        // (number of channels / 7) steps per second; minimal rate is 10 per second
++        const float rows =
++            static_cast<float>(m_gridModel ? m_gridModel->ChannelItemsSize() : 0);
++        float maxSpeed = std::max(frameDuration * 0.001f * 30, frameDuration * 0.001f * rows / 7);
++        float minSpeed = frameDuration * 0.001f * 10;
++        m_scrollItemsPerFrame += std::max(minSpeed, speed * maxSpeed);
++        m_lastHoldTime = CTimeUtils::GetFrameTime();
++
++        // never burst several steps after a stalled frame
++        if (m_scrollItemsPerFrame > 1.0f)
++          m_scrollItemsPerFrame = 1.0f;
++
++        // While the scroll animation of the axis this action moves is still more
++        // than 1.5 steps away from its target, absorb the repeat. Otherwise the
++        // target outruns the drawn offset until ScrollToChannelOffset()/
++        // ScrollToBlockOffset() snap the drawn offset, teleporting past rows.
++        float pending = 0.0f;
++        if (m_programmeLayout)
++        {
++          const bool channelAxis =
++              (m_orientation == VERTICAL)
++                  ? (action.GetID() == ACTION_MOVE_UP || action.GetID() == ACTION_MOVE_DOWN)
++                  : (action.GetID() == ACTION_MOVE_LEFT || action.GetID() == ACTION_MOVE_RIGHT);
++          if (channelAxis)
++          {
++            const float size = m_programmeLayout->Size(m_orientation);
++            if (size > 0)
++              pending =
++                  std::fabs(m_channelOffset * size - GetChannelScrollOffsetPos()) / size;
++          }
++          else if (m_blockSize > 0)
++          {
++            pending = std::fabs(m_blockOffset * m_blockSize - GetProgrammeScrollOffsetPos()) /
++                      (m_blockSize * BLOCK_SCROLL_OFFSET);
++          }
++        }
++
++        if (pending > 1.5f || m_scrollItemsPerFrame < 1.0f)
++          return true; // repeat absorbed; the animation is still catching up
++
++        m_scrollItemsPerFrame -= 1.0f;
++        CLog::Log(LOGDEBUG, "epg-holdscroll: step (hold {} ms, pending {:.2f})",
++                  action.GetHoldTime(), pending);
++        switch (action.GetID())
++        {
++          case ACTION_MOVE_UP:
++            OnUp();
++            break;
++          case ACTION_MOVE_DOWN:
++            OnDown();
++            break;
++          case ACTION_MOVE_LEFT:
++            OnLeft();
++            break;
++          default:
++            OnRight();
++            break;
++        }
++        return true;
++      }
++
++      // single press: unchanged behaviour
++      m_lastHoldTime = CTimeUtils::GetFrameTime();
++      m_scrollItemsPerFrame = 0.0f;
++      return CGUIControl::OnAction(action);
++    }
++
+     case ACTION_NAV_BACK:
+       // use base class implementation
+       return CGUIControl::OnAction(action);
+diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.h b/xbmc/pvr/guilib/GUIEPGGridContainer.h
+index 09acfc7..7ad5ac4 100644
+--- a/xbmc/pvr/guilib/GUIEPGGridContainer.h
++++ b/xbmc/pvr/guilib/GUIEPGGridContainer.h
+@@ -257,6 +257,10 @@ namespace PVR
+ 
+     int m_scrollTime;
+ 
++    // held-key budget (see OnAction), same pattern as CGUIBaseContainer
++    float m_scrollItemsPerFrame = 0.0f;
++    unsigned int m_lastHoldTime = 0;
++
+     int m_programmeScrollLastTime = 0;
+     float m_programmeScrollSpeed = 0;
+     float m_programmeScrollOffset = 0;
