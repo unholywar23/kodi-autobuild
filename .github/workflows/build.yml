@@ -53,6 +53,10 @@ jobs:
           $h = (Select-String -Path xbmc\pvr\guilib\GUIEPGGridContainer.cpp -Pattern "epg-holdscroll").Count
           if ($h -lt 1) { throw "patched file does not contain epg-holdscroll" }
           Write-Host "epg-holdscroll occurrences in source: $h"
+          # mirrors.kodi.tv flakes from Azure runners (two runs died on build-deps downloads);
+          # pin the CMake default mirror to a reliable one that carries build-deps/sources.
+          (Get-Content CMakeLists.txt) -replace [regex]::Escape('set(KODI_MIRROR "http://mirrors.kodi.tv")'), 'set(KODI_MIRROR "https://ftp.fau.de/xbmc")' | Set-Content CMakeLists.txt
+          Select-String -Path CMakeLists.txt -Pattern "ftp.fau.de" | ForEach-Object { Write-Host $_.Line }
 
       - name: Pin CMake 3.31 and Java 17 on PATH
         shell: pwsh
