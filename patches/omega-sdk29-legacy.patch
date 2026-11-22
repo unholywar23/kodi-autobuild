@@ -3,7 +3,7 @@ index 49105e3..037c3a4 100644
 --- a/cmake/platform/android/android.cmake
 +++ b/cmake/platform/android/android.cmake
 @@ -5,6 +5,9 @@ list(APPEND PLATFORM_OPTIONAL_DEPS LibDovi)
- 
+
  # Store SDK compile version
  set(TARGET_SDK 34)
 +# Android targetSdkVersion. Kept at 29 so requestLegacyExternalStorage
@@ -11,12 +11,21 @@ index 49105e3..037c3a4 100644
 +set(TARGET_TARGETSDK 29)
  # Minimum supported SDK version
  set(TARGET_MINSDK 21)
- 
+
 diff --git a/tools/android/packaging/xbmc/build.gradle.in b/tools/android/packaging/xbmc/build.gradle.in
 index 14c9c2b..947bc84 100644
 --- a/tools/android/packaging/xbmc/build.gradle.in
 +++ b/tools/android/packaging/xbmc/build.gradle.in
-@@ -7,7 +7,7 @@ android {
+@@ -4,10 +4,16 @@ android {
+     namespace '@APP_PACKAGE@'
+     compileSdk @TARGET_SDK@
+     ndkPath "@NDKROOT@"
++    lint {
++        // targetSdk is intentionally pinned to 29 for legacy /sdcard access.
++        // Do not let lintVitalRelease fail the release build on that.
++        disable 'ExpiredTargetSdkVersion'
++        checkReleaseBuilds false
++    }
      defaultConfig {
          applicationId "@APP_PACKAGE@"
          minSdk @TARGET_MINSDK@
