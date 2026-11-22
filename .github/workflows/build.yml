@@ -180,6 +180,14 @@ jobs:
             echo "no patch applies to tag $KODI_TAG"; exit 1
           fi
           grep -q StartsBeforePage xbmc/pvr/guilib/GUIEPGGridContainer.cpp
+          echo "--- applying sdk29 legacy-storage patch ---"
+          if ! git apply --check $GITHUB_WORKSPACE/patches/omega-sdk29-legacy.patch; then
+            echo "omega-sdk29-legacy.patch does not apply to tag $KODI_TAG"; exit 1
+          fi
+          git apply $GITHUB_WORKSPACE/patches/omega-sdk29-legacy.patch
+          echo "applied: omega-sdk29-legacy.patch"
+          grep -q "set(TARGET_TARGETSDK 29)" cmake/platform/android/android.cmake
+          grep -q "targetSdk @TARGET_TARGETSDK@" tools/android/packaging/xbmc/build.gradle.in
 
       - name: Restore depends cache
         id: depcache
@@ -246,11 +254,22 @@ jobs:
           unzip -q "$apk" lib/armeabi-v7a/libkodi.so -d /tmp/apkchk
           grep -aq StartsBeforePage /tmp/apkchk/lib/armeabi-v7a/libkodi.so
           echo "libkodi.so contains StartsBeforePage: OK"
+          # Assert the built APK targets SDK 29 (legacy external storage path).
+          aapt2=$(ls $WORK/sdk/build-tools/*/aapt2 2>/dev/null | head -1)
+          aapt=$(ls $WORK/sdk/build-tools/*/aapt 2>/dev/null | head -1)
+          badging=""
+          if [ -n "$aapt2" ]; then badging=$("$aapt2" dump badging "$apk" 2>/dev/null); fi
+          if [ -z "$badging" ] && [ -n "$aapt" ]; then badging=$("$aapt" dump badging "$apk" 2>/dev/null); fi
+          if [ -z "$badging" ]; then echo "could not dump APK badging"; exit 1; fi
+          target_sdk=$(echo "$badging" | grep -oE "targetSdkVersion:'[0-9]+'" | grep -oE "[0-9]+" | head -1)
+          echo "APK targetSdkVersion: $target_sdk"
+          if [ "$target_sdk" != "29" ]; then echo "targetSdkVersion is '$target_sdk', expected 29"; exit 1; fi
+          echo "APK targetSdkVersion is 29: OK"
           $WORK/sdk/build-tools/33.0.1/apksigner verify --print-certs "$apk"
-          cp "$apk" "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.apk"
+          cp "$apk" "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.apk"
           cd $GITHUB_WORKSPACE
-          sha256sum "kodi-$KODI_TAG-armeabi-v7a.apk" > "kodi-$KODI_TAG-armeabi-v7a.sha256.txt"
-          cat "kodi-$KODI_TAG-armeabi-v7a.sha256.txt"
+          sha256sum "kodi-$KODI_TAG-sdk29-armeabi-v7a.apk" > "kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"
+          cat "kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"
 
       - name: Upload to release
         env:
@@ -261,5 +280,5 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "Kodi $KODI_TAG + guide flag" --notes "Automated build of Kodi $KODI_TAG with the EPG guide StartsBeforePage patch." || true
           fi
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.apk" \
-            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-armeabi-v7a.sha256.txt"
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.apk" \
+            "$GITHUB_WORKSPACE/kodi-$KODI_TAG-sdk29-armeabi-v7a.sha256.txt"

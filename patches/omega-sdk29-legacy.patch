@@ -1,0 +1,27 @@
+diff --git a/cmake/platform/android/android.cmake b/cmake/platform/android/android.cmake
+index 49105e3..037c3a4 100644
+--- a/cmake/platform/android/android.cmake
++++ b/cmake/platform/android/android.cmake
+@@ -5,6 +5,9 @@ list(APPEND PLATFORM_OPTIONAL_DEPS LibDovi)
+ 
+ # Store SDK compile version
+ set(TARGET_SDK 34)
++# Android targetSdkVersion. Kept at 29 so requestLegacyExternalStorage
++# (broad /sdcard access via WRITE_EXTERNAL_STORAGE) is honored on Android 11+.
++set(TARGET_TARGETSDK 29)
+ # Minimum supported SDK version
+ set(TARGET_MINSDK 21)
+ 
+diff --git a/tools/android/packaging/xbmc/build.gradle.in b/tools/android/packaging/xbmc/build.gradle.in
+index 14c9c2b..947bc84 100644
+--- a/tools/android/packaging/xbmc/build.gradle.in
++++ b/tools/android/packaging/xbmc/build.gradle.in
+@@ -7,7 +7,7 @@ android {
+     defaultConfig {
+         applicationId "@APP_PACKAGE@"
+         minSdk @TARGET_MINSDK@
+-        targetSdk @TARGET_SDK@
++        targetSdk @TARGET_TARGETSDK@
+         versionCode @APP_VERSION_CODE_ANDROID@
+         versionName "@APP_VERSION@"
+     }
