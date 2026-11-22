@@ -1,5 +1,5 @@
 diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
-index de3ef10..8e0f47c 100644
+index de3ef10..09c5bc6 100644
 --- a/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
 +++ b/xbmc/pvr/guilib/GUIEPGGridContainer.cpp
 @@ -25,9 +25,12 @@
@@ -26,7 +26,24 @@ index de3ef10..8e0f47c 100644
  CGUIEPGGridContainer::CGUIEPGGridContainer(int parentID,
                                             int controlID,
                                             float posX,
-@@ -419,6 +426,90 @@ bool CGUIEPGGridContainer::OnAction(const CAction& action)
+@@ -182,6 +189,16 @@ void CGUIEPGGridContainer::Process(unsigned int currentTime, CDirtyRegionList& d
+     }
+   }
+ 
++  // flush the viewport announce once navigation has settled (see HandleProgrammeGrid)
++  if (m_refreshListSuppressed && !m_channelScrollSpeed && !m_programmeScrollSpeed &&
++      (m_lastHoldTime == 0 || CTimeUtils::GetFrameTime() - m_lastHoldTime >= 1000))
++  {
++    m_refreshListSuppressed = false;
++    const CGUIMessage msg(GUI_MSG_REFRESH_LIST, GetParentID(), GetID(),
++                          static_cast<int>(PVREvent::Epg));
++    CServiceBroker::GetAppMessenger()->SendGUIMessage(msg);
++  }
++
+   UpdateScrollOffset(currentTime);
+   ProcessChannels(currentTime, dirtyregions);
+   ProcessRulerDate(currentTime, dirtyregions);
+@@ -419,6 +436,90 @@ bool CGUIEPGGridContainer::OnAction(const CAction& action)
      case ACTION_MOVE_RIGHT:
      case ACTION_MOVE_DOWN:
      case ACTION_MOVE_UP:
@@ -117,17 +134,48 @@ index de3ef10..8e0f47c 100644
      case ACTION_NAV_BACK:
        // use base class implementation
        return CGUIControl::OnAction(action);
+@@ -2368,10 +2469,24 @@ void CGUIEPGGridContainer::HandleProgrammeGrid(bool bRender, unsigned int curren
+ 
+     if (m_gridModel->FreeProgrammeMemory(firstChannel, lastChannel, firstBlock, lastBlock))
+     {
+-      // announce changed viewport
+-      const CGUIMessage msg(
+-          GUI_MSG_REFRESH_LIST, GetParentID(), GetID(), static_cast<int>(PVREvent::Epg));
+-      CServiceBroker::GetAppMessenger()->SendGUIMessage(msg);
++      // Announce the changed viewport - but not for every step of a key-driven
++      // scroll: the announce makes the guide window copy the whole timeline list
++      // on the gui thread (CGUIWindowPVRGuideBase: GUI_MSG_REFRESH_LIST ->
++      // Refresh(true) -> GetDirectory), which starves rendering on slow hardware
++      // ("epg-holdscroll"). The grid model refills itself lazily
++      // (GetGridItemPtr), so the copy can wait until navigation settles; the
++      // deferred announce is sent from Process().
++      if (m_lastHoldTime != 0 && CTimeUtils::GetFrameTime() - m_lastHoldTime < 1000)
++      {
++        m_refreshListSuppressed = true;
++      }
++      else
++      {
++        // announce changed viewport
++        const CGUIMessage msg(
++            GUI_MSG_REFRESH_LIST, GetParentID(), GetID(), static_cast<int>(PVREvent::Epg));
++        CServiceBroker::GetAppMessenger()->SendGUIMessage(msg);
++      }
+     }
+   }
+ 
 diff --git a/xbmc/pvr/guilib/GUIEPGGridContainer.h b/xbmc/pvr/guilib/GUIEPGGridContainer.h
-index 09acfc7..7ad5ac4 100644
+index 09acfc7..e1606e8 100644
 --- a/xbmc/pvr/guilib/GUIEPGGridContainer.h
 +++ b/xbmc/pvr/guilib/GUIEPGGridContainer.h
-@@ -257,6 +257,10 @@ namespace PVR
+@@ -257,6 +257,12 @@ namespace PVR
  
      int m_scrollTime;
  
 +    // held-key budget (see OnAction), same pattern as CGUIBaseContainer
 +    float m_scrollItemsPerFrame = 0.0f;
 +    unsigned int m_lastHoldTime = 0;
++    // viewport announce held back while keys drive the grid (see HandleProgrammeGrid)
++    bool m_refreshListSuppressed = false;
 +
      int m_programmeScrollLastTime = 0;
      float m_programmeScrollSpeed = 0;
